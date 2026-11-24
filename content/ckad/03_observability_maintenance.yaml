@@ -1,0 +1,122 @@
+id: ckad-03-observability
+title: "Application Observability and Maintenance"
+exam: CKAD
+weight: 15
+objectives:
+  - id: ckad-03-probes
+    title: "Implement liveness, readiness, and startup probes"
+    tasks:
+      - id: ckad-03-liveness-t1
+        prompt: |
+          Create a Pod named `probed-app` in `game-lab` (image `nginx:1.25`)
+          with a liveness probe that does an HTTP GET on `/` port 80, and a
+          readiness probe doing the same.
+        hints:
+          - >
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: probed-app
+              namespace: game-lab
+            spec:
+              containers:
+                - name: nginx
+                  image: nginx:1.25
+                  livenessProbe:
+                    httpGet: {path: /, port: 80}
+                    initialDelaySeconds: 3
+                  readinessProbe:
+                    httpGet: {path: /, port: 80}
+                    initialDelaySeconds: 3
+        cleanup:
+          - "kubectl delete pod probed-app -n game-lab --ignore-not-found"
+        checks:
+          - type: jsonpath_equals
+            kind: pod
+            name: probed-app
+            namespace: game-lab
+            jsonpath: "{.spec.containers[0].livenessProbe.httpGet.port}"
+            expected: 80
+          - type: jsonpath_equals
+            kind: pod
+            name: probed-app
+            namespace: game-lab
+            jsonpath: "{.spec.containers[0].readinessProbe.httpGet.port}"
+            expected: 80
+          - type: pod_running
+            name: probed-app
+            namespace: game-lab
+        exam_tip: "Liveness failures restart the container; readiness failures just pull it out of Service endpoints. Confusing the two is a very common exam mistake."
+
+      - id: ckad-03-startup-t1
+        prompt: |
+          Add a startupProbe to the `probed-app` Pod's spec (you'll need to
+          delete and recreate it since Pod specs are largely immutable) that
+          allows up to 30 seconds (`failureThreshold: 10`, `periodSeconds: 3`)
+          for the app to start before liveness/readiness probes kick in.
+        hints:
+          - >
+            startupProbe:
+              httpGet: {path: /, port: 80}
+              failureThreshold: 10
+              periodSeconds: 3
+        checks:
+          - type: jsonpath_equals
+            kind: pod
+            name: probed-app
+            namespace: game-lab
+            jsonpath: "{.spec.containers[0].startupProbe.failureThreshold}"
+            expected: 10
+        exam_tip: "startupProbe exists precisely so slow-starting apps don't get liveness-killed before they've even finished booting."
+
+  - id: ckad-03-logging
+    title: "Use container logs to debug applications"
+    tasks:
+      - id: ckad-03-logs-t1
+        prompt: |
+          Create a Pod named `logger` in `game-lab` (image `busybox:1.36`)
+          that prints "checkpoint-alpha" once and then sleeps. Confirm you
+          can retrieve that log line with `kubectl logs`.
+        hints:
+          - "kubectl run logger --image=busybox:1.36 -n game-lab --command -- sh -c 'echo checkpoint-alpha && sleep 3600'"
+          - "kubectl logs logger -n game-lab"
+        cleanup:
+          - "kubectl delete pod logger -n game-lab --ignore-not-found"
+        checks:
+          - type: command_output_contains
+            command: "kubectl logs logger -n game-lab"
+            expected: "checkpoint-alpha"
+        exam_tip: "kubectl logs -f follows in real time; add --previous to see logs from a container's last crash."
+
+  - id: ckad-03-debugging
+    title: "Debug applications with kubectl exec and ephemeral containers"
+    tasks:
+      - id: ckad-03-exec-t1
+        prompt: |
+          Using `kubectl exec`, run `hostname` inside the `logger` Pod from
+          the previous task and confirm you get output back (no cluster
+          state to check here — this task auto-passes once you run it).
+        hints:
+          - "kubectl exec logger -n game-lab -- hostname"
+        checks:
+          - type: command_output_contains
+            command: "kubectl exec logger -n game-lab -- hostname"
+            expected: "logger"
+        exam_tip: "kubectl exec -it pod -- sh drops you into an interactive shell for deeper debugging."
+
+  - id: ckad-03-metrics
+    title: "Understand resource usage monitoring (kubectl top)"
+    tasks:
+      - id: ckad-03-top-t1
+        prompt: |
+          Run `kubectl top nodes` to check whether the metrics-server is
+          installed and reporting resource usage. (If it isn't installed,
+          that's fine — this task passes as long as you've run the command
+          and observed the result, confirmed manually below.)
+        hints:
+          - "kubectl top nodes"
+          - "kubectl top pods -n game-lab"
+        checks:
+          - type: manual
+            prompt: "Did you run 'kubectl top nodes' and 'kubectl top pods' and check whether metrics-server is available?"
+        exam_tip: "kubectl top requires metrics-server to be installed in the cluster — it is NOT part of the Kubernetes control plane by default."

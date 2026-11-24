@@ -1,0 +1,132 @@
+id: ckad-02-deployment
+title: "Application Deployment"
+exam: CKAD
+weight: 20
+objectives:
+  - id: ckad-02-strategies
+    title: "Use deployment strategies (rolling update, blue/green, canary)"
+    tasks:
+      - id: ckad-02-rolling-t1
+        prompt: |
+          Create a Deployment named `rollout-demo` in `game-lab` (image
+          `nginx:1.24`, 4 replicas) with a rolling update strategy where
+          `maxSurge=1` and `maxUnavailable=0` (zero-downtime rollout).
+        hints:
+          - >
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: rollout-demo
+              namespace: game-lab
+            spec:
+              replicas: 4
+              strategy:
+                type: RollingUpdate
+                rollingUpdate:
+                  maxSurge: 1
+                  maxUnavailable: 0
+              selector:
+                matchLabels: {app: rollout-demo}
+              template:
+                metadata:
+                  labels: {app: rollout-demo}
+                spec:
+                  containers:
+                    - name: nginx
+                      image: nginx:1.24
+        cleanup:
+          - "kubectl delete deployment rollout-demo -n game-lab --ignore-not-found"
+        checks:
+          - type: jsonpath_equals
+            kind: deployment
+            name: rollout-demo
+            namespace: game-lab
+            jsonpath: "{.spec.strategy.rollingUpdate.maxUnavailable}"
+            expected: 0
+          - type: replica_count
+            kind: deployment
+            name: rollout-demo
+            namespace: game-lab
+            expected: 4
+        exam_tip: "maxUnavailable=0 guarantees full capacity throughout the rollout at the cost of temporarily using more resources (maxSurge)."
+
+      - id: ckad-02-canary-t1
+        prompt: |
+          Simulate a canary release: alongside `rollout-demo`, create a
+          second Deployment `rollout-demo-canary` in `game-lab` with 1
+          replica of `nginx:1.25`, sharing the label `app=rollout-demo` plus
+          an extra label `track=canary`, so both are eligible for the same
+          Service selector on `app=rollout-demo`.
+        hints:
+          - >
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: rollout-demo-canary
+              namespace: game-lab
+            spec:
+              replicas: 1
+              selector:
+                matchLabels: {app: rollout-demo, track: canary}
+              template:
+                metadata:
+                  labels: {app: rollout-demo, track: canary}
+                spec:
+                  containers:
+                    - name: nginx
+                      image: nginx:1.25
+        cleanup:
+          - "kubectl delete deployment rollout-demo-canary -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: deployment
+            name: rollout-demo-canary
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: deployment
+            name: rollout-demo-canary
+            namespace: game-lab
+            jsonpath: "{.spec.template.metadata.labels.track}"
+            expected: "canary"
+        exam_tip: "Canary releases on plain Kubernetes are just two Deployments sharing a Service selector at different replica ratios — no special resource type needed."
+
+  - id: ckad-02-helm-kustomize
+    title: "Understand deployment tooling (Helm, Kustomize) at a high level"
+    tasks:
+      - id: ckad-02-kustomize-t1
+        prompt: |
+          Create a directory with a minimal Kustomize base: a `deployment.yaml`
+          (any simple Deployment) and a `kustomization.yaml` that references
+          it. Apply it with `kubectl apply -k <dir>` into `game-lab`, and
+          confirm the Deployment named `kustomized-app` exists.
+        hints:
+          - "mkdir -p /tmp/kustomize-demo && cd /tmp/kustomize-demo"
+          - >
+            kustomization.yaml:
+              resources: [deployment.yaml]
+              namespace: game-lab
+          - "kubectl apply -k /tmp/kustomize-demo"
+        cleanup:
+          - "kubectl delete deployment kustomized-app -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: deployment
+            name: kustomized-app
+            namespace: game-lab
+        exam_tip: "CKAD tests you can READ and apply Kustomize/Helm output, not author complex charts from scratch — kubectl apply -k and helm template are the key commands."
+
+  - id: ckad-02-crd
+    title: "Understand API deprecations and use the Kubernetes API"
+    tasks:
+      - id: ckad-02-api-t1
+        prompt: |
+          Use `kubectl explain` to inspect the schema of `Deployment.spec.strategy`
+          and confirm you understand its fields (no cluster changes needed —
+          this task auto-passes once you run the command).
+        hints:
+          - "kubectl explain deployment.spec.strategy --recursive"
+        checks:
+          - type: command_output_contains
+            command: "kubectl explain deployment.spec.strategy"
+            expected: "rollingUpdate"
+        exam_tip: "kubectl explain is available offline in the exam and is the fastest way to recall exact field names without leaving the terminal."

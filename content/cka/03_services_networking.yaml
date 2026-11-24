@@ -1,0 +1,198 @@
+id: cka-03-services-networking
+title: "Services & Networking"
+exam: CKA
+weight: 20
+objectives:
+  - id: cka-03-services
+    title: "Understand and create Services (ClusterIP, NodePort)"
+    tasks:
+      - id: cka-03-svc-t1
+        prompt: |
+          Create a Deployment named `backend` in `game-lab` (image
+          `nginx:1.25`, 2 replicas, label `app=backend`), then expose it as a
+          ClusterIP Service named `backend` on port 80.
+        hints:
+          - "kubectl create deployment backend --image=nginx:1.25 --replicas=2 -n game-lab"
+          - "kubectl expose deployment backend --port=80 --name=backend -n game-lab"
+        cleanup:
+          - "kubectl delete deployment backend -n game-lab --ignore-not-found"
+          - "kubectl delete service backend -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: service
+            name: backend
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: service
+            name: backend
+            namespace: game-lab
+            jsonpath: "{.spec.type}"
+            expected: "ClusterIP"
+          - type: jsonpath_equals
+            kind: service
+            name: backend
+            namespace: game-lab
+            jsonpath: "{.spec.ports[0].port}"
+            expected: 80
+        exam_tip: "'kubectl expose' copies the Deployment's pod-template labels into the Service selector automatically."
+
+      - id: cka-03-svc-t2
+        prompt: |
+          Change the `backend` Service's type to `NodePort`.
+        hints:
+          - "kubectl patch service backend -n game-lab -p '{\"spec\":{\"type\":\"NodePort\"}}'"
+        checks:
+          - type: jsonpath_equals
+            kind: service
+            name: backend
+            namespace: game-lab
+            jsonpath: "{.spec.type}"
+            expected: "NodePort"
+        exam_tip: "kubectl get svc backend -n game-lab shows the auto-assigned NodePort in the 80:XXXXX/TCP column."
+
+      - id: cka-03-svc-t3
+        prompt: |
+          Verify the `backend` Service resolves and routes traffic: from a
+          temporary debug Pod in `game-lab`, curl
+          `http://backend.game-lab.svc.cluster.local` and confirm you get an
+          HTTP response (nginx welcome page).
+        hints:
+          - "kubectl run tmp-curl --image=busybox:1.36 -n game-lab --rm -it --restart=Never -- wget -qO- http://backend.game-lab.svc.cluster.local"
+        checks:
+          - type: command_output_contains
+            command: "kubectl run tmp-curl-check --image=busybox:1.36 -n game-lab --rm --restart=Never --command --timeout=30s -- wget -qO- http://backend.game-lab.svc.cluster.local"
+            expected: "nginx"
+        exam_tip: "Cluster DNS names follow <service>.<namespace>.svc.cluster.local — memorize that pattern cold."
+
+  - id: cka-03-ingress
+    title: "Configure and use Ingress resources"
+    tasks:
+      - id: cka-03-ing-t1
+        prompt: |
+          Create an Ingress named `backend-ingress` in `game-lab` that routes
+          host `backend.local` path `/` to the `backend` Service on port 80.
+          (An ingress controller does not need to actually be installed for
+          this check — it verifies the Ingress spec itself.)
+        hints:
+          - >
+            apiVersion: networking.k8s.io/v1
+            kind: Ingress
+            metadata:
+              name: backend-ingress
+              namespace: game-lab
+            spec:
+              rules:
+                - host: backend.local
+                  http:
+                    paths:
+                      - path: /
+                        pathType: Prefix
+                        backend:
+                          service:
+                            name: backend
+                            port:
+                              number: 80
+        cleanup:
+          - "kubectl delete ingress backend-ingress -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: ingress
+            name: backend-ingress
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: ingress
+            name: backend-ingress
+            namespace: game-lab
+            jsonpath: "{.spec.rules[0].host}"
+            expected: "backend.local"
+          - type: jsonpath_equals
+            kind: ingress
+            name: backend-ingress
+            namespace: game-lab
+            jsonpath: "{.spec.rules[0].http.paths[0].backend.service.name}"
+            expected: "backend"
+        exam_tip: "Know the Ingress v1 schema (backend.service.name/number) cold — the old extensions/v1beta1 shorthand is gone from current exam versions."
+
+  - id: cka-03-networkpolicy
+    title: "Define and enforce Network Policies"
+    tasks:
+      - id: cka-03-np-t1
+        prompt: |
+          Create a NetworkPolicy named `deny-all` in `game-lab` that denies
+          all ingress traffic to all Pods in the namespace by default.
+        hints:
+          - >
+            apiVersion: networking.k8s.io/v1
+            kind: NetworkPolicy
+            metadata:
+              name: deny-all
+              namespace: game-lab
+            spec:
+              podSelector: {}
+              policyTypes: ["Ingress"]
+        cleanup:
+          - "kubectl delete networkpolicy deny-all -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: networkpolicy
+            name: deny-all
+            namespace: game-lab
+          - type: jsonpath_contains
+            kind: networkpolicy
+            name: deny-all
+            namespace: game-lab
+            jsonpath: "{.spec.policyTypes}"
+            expected: "Ingress"
+        exam_tip: "An empty podSelector {} matches ALL pods in the namespace — that's what makes this a default-deny policy."
+
+      - id: cka-03-np-t2
+        prompt: |
+          Create a second NetworkPolicy named `allow-backend-from-labelled`
+          in `game-lab` that allows ingress to Pods labeled `app=backend`
+          only from Pods labeled `role=frontend`, on port 80.
+        hints:
+          - >
+            apiVersion: networking.k8s.io/v1
+            kind: NetworkPolicy
+            metadata:
+              name: allow-backend-from-labelled
+              namespace: game-lab
+            spec:
+              podSelector:
+                matchLabels: {app: backend}
+              policyTypes: ["Ingress"]
+              ingress:
+                - from:
+                    - podSelector:
+                        matchLabels: {role: frontend}
+                  ports:
+                    - protocol: TCP
+                      port: 80
+        cleanup:
+          - "kubectl delete networkpolicy allow-backend-from-labelled -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: networkpolicy
+            name: allow-backend-from-labelled
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: networkpolicy
+            name: allow-backend-from-labelled
+            namespace: game-lab
+            jsonpath: "{.spec.ingress[0].from[0].podSelector.matchLabels.role}"
+            expected: "frontend"
+        exam_tip: "NetworkPolicies are additive per-Pod. If ANY policy selects a Pod for ingress, only traffic explicitly allowed by (the union of) matching policies gets through."
+
+  - id: cka-03-dns
+    title: "Understand cluster DNS and troubleshoot resolution"
+    tasks:
+      - id: cka-03-dns-t1
+        prompt: |
+          Confirm CoreDNS Pods are Running in the `kube-system` namespace.
+        hints:
+          - "kubectl get pods -n kube-system -l k8s-app=kube-dns"
+        checks:
+          - type: command_output_contains
+            command: "kubectl get pods -n kube-system -l k8s-app=kube-dns --no-headers"
+            expected: "Running"
+        exam_tip: "If DNS resolution mysteriously fails cluster-wide, check CoreDNS Pod health and its ConfigMap before anything else."

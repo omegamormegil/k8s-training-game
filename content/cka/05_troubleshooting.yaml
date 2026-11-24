@@ -1,0 +1,153 @@
+id: cka-05-troubleshooting
+title: "Troubleshooting"
+exam: CKA
+weight: 30
+objectives:
+  - id: cka-05-app-failure
+    title: "Diagnose and resolve failing application deployments"
+    tasks:
+      - id: cka-05-app-t1
+        prompt: |
+          A broken Pod has been created for you in `game-lab` named
+          `crash-demo`, using a bogus image that will never pull. Investigate
+          it with `kubectl describe pod` and `kubectl logs`, then fix it by
+          patching the image to `busybox:1.36` (command `sleep 3600`).
+        setup:
+          - >
+            kubectl run crash-demo --image=busybox:1.36-does-not-exist -n game-lab
+            --restart=Never --command -- sleep 3600 2>/dev/null || true
+        hints:
+          - "kubectl describe pod crash-demo -n game-lab   # look at the Events section for ImagePullBackOff"
+          - "kubectl set image pod/crash-demo crash-demo=busybox:1.36 -n game-lab   # NOTE: you cannot change a Pod's image in place; you'll need to delete and recreate it"
+          - "kubectl delete pod crash-demo -n game-lab && kubectl run crash-demo --image=busybox:1.36 -n game-lab --restart=Never --command -- sleep 3600"
+        cleanup:
+          - "kubectl delete pod crash-demo -n game-lab --ignore-not-found"
+        checks:
+          - type: container_image
+            kind: pod
+            name: crash-demo
+            namespace: game-lab
+            expected: "busybox:1.36"
+          - type: pod_running
+            name: crash-demo
+            namespace: game-lab
+        exam_tip: "Pod spec fields (besides image in very specific cases, and a few others) are immutable — the fix is usually delete+recreate or a Deployment rollout, not an in-place patch."
+
+      - id: cka-05-app-t2
+        prompt: |
+          A Deployment named `bad-probe` has been created for you in
+          `game-lab` with a readiness probe pointing at the wrong port,
+          which means it never becomes Ready. Fix the probe so it points
+          at containerPort 80, and confirm the Pod becomes Ready.
+        setup:
+          - >
+            kubectl apply -n game-lab -f - <<'EOF'
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: bad-probe
+            spec:
+              replicas: 1
+              selector:
+                matchLabels: {app: bad-probe}
+              template:
+                metadata:
+                  labels: {app: bad-probe}
+                spec:
+                  containers:
+                    - name: nginx
+                      image: nginx:1.25
+                      ports:
+                        - containerPort: 80
+                      readinessProbe:
+                        httpGet:
+                          path: /
+                          port: 9999
+                        periodSeconds: 5
+            EOF
+        hints:
+          - "kubectl describe pod -l app=bad-probe -n game-lab   # readiness probe failures show up in Events"
+          - "kubectl edit deployment bad-probe -n game-lab   # change readinessProbe.httpGet.port to 80"
+        cleanup:
+          - "kubectl delete deployment bad-probe -n game-lab --ignore-not-found"
+        checks:
+          - type: jsonpath_equals
+            kind: deployment
+            name: bad-probe
+            namespace: game-lab
+            jsonpath: "{.spec.template.spec.containers[0].readinessProbe.httpGet.port}"
+            expected: 80
+          - type: replica_count
+            kind: deployment
+            name: bad-probe
+            namespace: game-lab
+            expected: 1
+        exam_tip: "readyReplicas staying at 0 while the Pod is Running (not crashing) is the classic signature of a bad readiness probe."
+
+  - id: cka-05-cluster-component
+    title: "Troubleshoot cluster component failures"
+    tasks:
+      - id: cka-05-comp-t1
+        prompt: |
+          Check the health of core control-plane components: run
+          `kubectl get componentstatuses` (or, on newer clusters,
+          `kubectl get --raw='/readyz?verbose'`) and confirm the API server
+          reports itself healthy.
+        hints:
+          - "kubectl get --raw='/readyz?verbose'"
+        checks:
+          - type: command_output_contains
+            command: "kubectl get --raw='/readyz?verbose'"
+            expected: "ok"
+        exam_tip: "componentstatuses is deprecated on modern clusters — /readyz and /livez raw endpoints are the current way to check control plane health."
+
+      - id: cka-05-comp-t2
+        prompt: |
+          List all Pods across all namespaces and confirm none are stuck in
+          `CrashLoopBackOff` or `Error` state on your cluster right now.
+        hints:
+          - "kubectl get pods --all-namespaces"
+        checks:
+          - type: command_output_not_contains
+            command: "kubectl get pods --all-namespaces --no-headers"
+            expected: "CrashLoopBackOff"
+        exam_tip: "A clean 'kubectl get pods -A' sweep is a fast first triage step before diving into any one workload."
+
+  - id: cka-05-networking-troubleshoot
+    title: "Troubleshoot networking issues"
+    tasks:
+      - id: cka-05-net-t1
+        prompt: |
+          A Service named `misconfigured-svc` has been created for you in
+          `game-lab` with a selector that matches no Pods. Investigate with
+          `kubectl describe svc` (look at the Endpoints field), then fix the
+          selector so it correctly targets Pods labeled `app=backend`
+          (from the Services & Networking module — create that Deployment
+          first if you haven't yet).
+        setup:
+          - >
+            kubectl apply -n game-lab -f - <<'EOF'
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: misconfigured-svc
+            spec:
+              selector:
+                app: wrong-label
+              ports:
+                - port: 80
+                  targetPort: 80
+            EOF
+        hints:
+          - "kubectl describe svc misconfigured-svc -n game-lab   # 'Endpoints: <none>' is the smoking gun"
+          - "kubectl patch service misconfigured-svc -n game-lab -p '{\"spec\":{\"selector\":{\"app\":\"backend\"}}}'"
+        cleanup:
+          - "kubectl delete service misconfigured-svc -n game-lab --ignore-not-found"
+        checks:
+          - type: jsonpath_equals
+            kind: service
+            name: misconfigured-svc
+            namespace: game-lab
+            jsonpath: "{.spec.selector.app}"
+            expected: "backend"
+        exam_tip: "'Endpoints: <none>' on a Service almost always means the selector doesn't match any Pod's labels — check both sides."

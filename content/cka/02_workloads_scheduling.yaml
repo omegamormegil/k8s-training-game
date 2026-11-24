@@ -1,0 +1,211 @@
+id: cka-02-workloads-scheduling
+title: "Workloads & Scheduling"
+exam: CKA
+weight: 15
+objectives:
+  - id: cka-02-deployments
+    title: "Manage Deployments, rolling updates and rollbacks"
+    tasks:
+      - id: cka-02-deploy-t1
+        prompt: |
+          Create a Deployment named `web` in `game-lab` running image
+          `nginx:1.25` with 3 replicas.
+        hints:
+          - "kubectl create deployment web --image=nginx:1.25 --replicas=3 -n game-lab"
+        cleanup:
+          - "kubectl delete deployment web -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: deployment
+            name: web
+            namespace: game-lab
+          - type: replica_count
+            kind: deployment
+            name: web
+            namespace: game-lab
+            expected: 3
+          - type: container_image
+            kind: deployment
+            name: web
+            namespace: game-lab
+            expected: "nginx:1.25"
+        exam_tip: "kubectl create deployment with --replicas is faster than editing YAML for simple cases."
+
+      - id: cka-02-deploy-t2
+        prompt: |
+          Update the `web` Deployment's image to `nginx:1.26` to trigger a
+          rolling update.
+        hints:
+          - "kubectl set image deployment/web nginx=nginx:1.26 -n game-lab"
+          - "The container name defaults to the image's base name; check with 'kubectl get deploy web -n game-lab -o jsonpath={.spec.template.spec.containers[0].name}'"
+        checks:
+          - type: container_image
+            kind: deployment
+            name: web
+            namespace: game-lab
+            expected: "nginx:1.26"
+        exam_tip: "kubectl rollout status deployment/web -n game-lab lets you watch the rollout live."
+
+      - id: cka-02-deploy-t3
+        prompt: |
+          Roll the `web` Deployment back to its previous revision (undo the
+          image update from the last task).
+        hints:
+          - "kubectl rollout undo deployment/web -n game-lab"
+        checks:
+          - type: container_image
+            kind: deployment
+            name: web
+            namespace: game-lab
+            expected: "nginx:1.25"
+        exam_tip: "kubectl rollout history deployment/web -n game-lab --revision=N shows exactly what changed at each revision."
+
+  - id: cka-02-scheduling
+    title: "Configure scheduling: node selectors, affinity, taints/tolerations"
+    tasks:
+      - id: cka-02-sched-t1
+        prompt: |
+          Create a Pod named `picky` in `game-lab` using image `busybox:1.36`
+          (command `sleep 3600`) that will only schedule onto nodes labeled
+          `disktype=ssd`. Use a nodeSelector.
+        hints:
+          - "kubectl label nodes <node> disktype=ssd   # so somewhere is schedulable"
+          - "kubectl run picky --image=busybox:1.36 -n game-lab --overrides='{\"spec\":{\"nodeSelector\":{\"disktype\":\"ssd\"}}}' --command -- sleep 3600"
+        cleanup:
+          - "kubectl delete pod picky -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: pod
+            name: picky
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: pod
+            name: picky
+            namespace: game-lab
+            jsonpath: "{.spec.nodeSelector.disktype}"
+            expected: "ssd"
+        exam_tip: "On a single-node k0s lab this Pod may stay Pending unless you label the node — that's expected and still passes this check, which only verifies the spec."
+
+      - id: cka-02-sched-t2
+        prompt: |
+          Create a Pod named `tolerant` in `game-lab` (image `busybox:1.36`,
+          command `sleep 3600`) that tolerates the taint
+          `dedicated=game:NoSchedule` you created earlier.
+        hints:
+          - >
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: tolerant
+              namespace: game-lab
+            spec:
+              containers:
+                - name: busybox
+                  image: busybox:1.36
+                  command: ["sleep", "3600"]
+              tolerations:
+                - key: "dedicated"
+                  operator: "Equal"
+                  value: "game"
+                  effect: "NoSchedule"
+        cleanup:
+          - "kubectl delete pod tolerant -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: pod
+            name: tolerant
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: pod
+            name: tolerant
+            namespace: game-lab
+            jsonpath: "{.spec.tolerations[0].key}"
+            expected: "dedicated"
+        exam_tip: "Tolerations let a Pod land on a tainted node — they don't force it there. Combine with nodeAffinity for that."
+
+  - id: cka-02-resource-limits
+    title: "Configure resource requests, limits, and manage resource usage"
+    tasks:
+      - id: cka-02-res-t1
+        prompt: |
+          Create a Pod named `constrained` in `game-lab` (image `nginx:1.25`)
+          with a memory request of `128Mi` and a memory limit of `256Mi`.
+        hints:
+          - "kubectl run constrained --image=nginx:1.25 -n game-lab --requests=memory=128Mi --limits=memory=256Mi"
+        cleanup:
+          - "kubectl delete pod constrained -n game-lab --ignore-not-found"
+        checks:
+          - type: container_resources
+            kind: pod
+            name: constrained
+            namespace: game-lab
+            resource_type: requests
+            resource_name: memory
+            expected: "128Mi"
+          - type: container_resources
+            kind: pod
+            name: constrained
+            namespace: game-lab
+            resource_type: limits
+            resource_name: memory
+            expected: "256Mi"
+        exam_tip: "'kubectl run --requests / --limits' avoids hand-writing the resources: block for quick single-container Pods."
+
+  - id: cka-02-daemonsets
+    title: "Manage DaemonSets and static Pods"
+    tasks:
+      - id: cka-02-ds-t1
+        prompt: |
+          Create a DaemonSet named `node-agent` in `game-lab` running image
+          `busybox:1.36` with command `sleep 3600`, so one copy runs per node.
+        hints:
+          - >
+            A DaemonSet has no --replicas flag; kubectl doesn't have a
+            'create daemonset' shorthand, so write minimal YAML:
+
+            apiVersion: apps/v1
+            kind: DaemonSet
+            metadata:
+              name: node-agent
+              namespace: game-lab
+            spec:
+              selector:
+                matchLabels: {app: node-agent}
+              template:
+                metadata:
+                  labels: {app: node-agent}
+                spec:
+                  containers:
+                    - name: agent
+                      image: busybox:1.36
+                      command: ["sleep", "3600"]
+        cleanup:
+          - "kubectl delete daemonset node-agent -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: daemonset
+            name: node-agent
+            namespace: game-lab
+          - type: jsonpath_gte
+            kind: daemonset
+            name: node-agent
+            namespace: game-lab
+            jsonpath: "{.status.desiredNumberScheduled}"
+            expected: 1
+        exam_tip: "DaemonSets ignore the default scheduler's normal replica logic — one Pod per matching node, always."
+
+      - id: cka-02-static-t1
+        prompt: |
+          On a control-plane node, inspect the static Pod manifest directory
+          (default `/etc/kubernetes/manifests` on kubeadm, but on k0s the
+          equivalent is managed internally — instead, locate and read the
+          kube-apiserver static Pod definition on this cluster and note how
+          it's configured). Confirm you can see kube-apiserver running as a
+          Pod in the `kube-system` namespace.
+        hints:
+          - "kubectl get pods -n kube-system"
+          - "On k0s, control plane components typically run as regular OS processes managed by the k0s supervisor rather than static Pods — describe what you find either way."
+        checks:
+          - type: manual
+            prompt: "Did you inspect how the control plane components are run on this cluster (static Pods vs k0s-managed processes)?"
+        exam_tip: "The real exam runs kubeadm clusters where kube-apiserver, etcd, scheduler, and controller-manager ARE static Pods in /etc/kubernetes/manifests — know that layout even though k0s does it differently."

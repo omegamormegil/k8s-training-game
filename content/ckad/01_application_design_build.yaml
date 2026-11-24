@@ -1,0 +1,164 @@
+id: ckad-01-design-build
+title: "Application Design and Build"
+exam: CKAD
+weight: 20
+objectives:
+  - id: ckad-01-images
+    title: "Define, build and modify container images"
+    tasks:
+      - id: ckad-01-img-t1
+        prompt: |
+          Create a Pod named `custom-image` in `game-lab` using image
+          `busybox:1.36`, overriding its entrypoint command to run
+          `echo hello-cka && sleep 3600`.
+        hints:
+          - "kubectl run custom-image --image=busybox:1.36 -n game-lab --command -- sh -c 'echo hello-cka && sleep 3600'"
+        cleanup:
+          - "kubectl delete pod custom-image -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: pod
+            name: custom-image
+            namespace: game-lab
+          - type: jsonpath_contains
+            kind: pod
+            name: custom-image
+            namespace: game-lab
+            jsonpath: "{.spec.containers[0].command}"
+            expected: "sh"
+        exam_tip: "kubectl run --command -- overrides ENTRYPOINT entirely; use --args to only override CMD and keep the image's ENTRYPOINT."
+
+  - id: ckad-01-multicontainer
+    title: "Multi-container Pod design patterns (sidecar, init, ambassador)"
+    tasks:
+      - id: ckad-01-sidecar-t1
+        prompt: |
+          Create a Pod named `sidecar-demo` in `game-lab` with two
+          containers sharing an emptyDir volume at `/var/log/app`: a main
+          container `writer` (busybox:1.36) that appends a line to
+          `/var/log/app/out.log` every 5 seconds, and a sidecar `reader`
+          (busybox:1.36) that tails that same file.
+        hints:
+          - >
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: sidecar-demo
+              namespace: game-lab
+            spec:
+              volumes:
+                - name: logs
+                  emptyDir: {}
+              containers:
+                - name: writer
+                  image: busybox:1.36
+                  command: ["sh", "-c", "while true; do echo $(date) >> /var/log/app/out.log; sleep 5; done"]
+                  volumeMounts:
+                    - {name: logs, mountPath: /var/log/app}
+                - name: reader
+                  image: busybox:1.36
+                  command: ["sh", "-c", "tail -f /var/log/app/out.log"]
+                  volumeMounts:
+                    - {name: logs, mountPath: /var/log/app}
+        cleanup:
+          - "kubectl delete pod sidecar-demo -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: pod
+            name: sidecar-demo
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: pod
+            name: sidecar-demo
+            namespace: game-lab
+            jsonpath: "{.spec.containers[1].name}"
+            expected: "reader"
+          - type: pod_running
+            name: sidecar-demo
+            namespace: game-lab
+        exam_tip: "The sidecar pattern is the #1 multi-container pattern tested on CKAD — know it well enough to write it from memory."
+
+      - id: ckad-01-init-t1
+        prompt: |
+          Create a Pod named `init-demo` in `game-lab` with an initContainer
+          `wait-for-config` (busybox:1.36) that runs
+          `sleep 5` before the main container `app` (nginx:1.25) starts.
+        hints:
+          - >
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: init-demo
+              namespace: game-lab
+            spec:
+              initContainers:
+                - name: wait-for-config
+                  image: busybox:1.36
+                  command: ["sh", "-c", "sleep 5"]
+              containers:
+                - name: app
+                  image: nginx:1.25
+        cleanup:
+          - "kubectl delete pod init-demo -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: pod
+            name: init-demo
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: pod
+            name: init-demo
+            namespace: game-lab
+            jsonpath: "{.spec.initContainers[0].name}"
+            expected: "wait-for-config"
+          - type: pod_running
+            name: init-demo
+            namespace: game-lab
+        exam_tip: "Init containers run to completion, in order, before ANY main container starts — great for one-shot setup like waiting on a dependency."
+
+  - id: ckad-01-jobs
+    title: "Use Jobs and CronJobs"
+    tasks:
+      - id: ckad-01-job-t1
+        prompt: |
+          Create a Job named `batch-task` in `game-lab` that runs image
+          `busybox:1.36` with command `echo done`, and completes
+          successfully.
+        hints:
+          - "kubectl create job batch-task --image=busybox:1.36 -n game-lab -- echo done"
+        cleanup:
+          - "kubectl delete job batch-task -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: job
+            name: batch-task
+            namespace: game-lab
+          - type: jsonpath_gte
+            kind: job
+            name: batch-task
+            namespace: game-lab
+            jsonpath: "{.status.succeeded}"
+            expected: 1
+        exam_tip: "kubectl create job my-job --image=... -- <command> is much faster than YAML for one-off Jobs."
+
+      - id: ckad-01-cronjob-t1
+        prompt: |
+          Create a CronJob named `nightly-report` in `game-lab` that runs
+          image `busybox:1.36` with command `echo report` every 5 minutes
+          (schedule `*/5 * * * *`).
+        hints:
+          - "kubectl create cronjob nightly-report --image=busybox:1.36 --schedule='*/5 * * * *' -n game-lab -- echo report"
+        cleanup:
+          - "kubectl delete cronjob nightly-report -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: cronjob
+            name: nightly-report
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: cronjob
+            name: nightly-report
+            namespace: game-lab
+            jsonpath: "{.spec.schedule}"
+            expected: "*/5 * * * *"
+        exam_tip: "CronJob schedule syntax is standard cron — remember it's UTC unless a timeZone field is set (Kubernetes 1.24+)."

@@ -1,0 +1,145 @@
+id: cka-01-cluster-architecture
+title: "Cluster Architecture, Installation & Configuration"
+exam: CKA
+weight: 25
+objectives:
+  - id: cka-01-rbac
+    title: "Manage role based access control (RBAC)"
+    tasks:
+      - id: cka-01-rbac-t1
+        prompt: |
+          Create a ServiceAccount named `ci-bot` in the `game-lab` namespace.
+        hints:
+          - "kubectl create serviceaccount --help"
+          - "kubectl create serviceaccount ci-bot -n game-lab"
+        cleanup:
+          - "kubectl delete serviceaccount ci-bot -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: serviceaccount
+            name: ci-bot
+            namespace: game-lab
+        exam_tip: "'kubectl create sa' is a shorthand alias for serviceaccount you'll see in real terminals."
+
+      - id: cka-01-rbac-t2
+        prompt: |
+          Create a Role named `pod-reader` in `game-lab` that allows `get`,
+          `list`, and `watch` on `pods`.
+        hints:
+          - "kubectl create role pod-reader --verb=get,list,watch --resource=pods -n game-lab"
+        cleanup:
+          - "kubectl delete role pod-reader -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: role
+            name: pod-reader
+            namespace: game-lab
+          - type: jsonpath_contains
+            kind: role
+            name: pod-reader
+            namespace: game-lab
+            jsonpath: "{.rules[0].verbs}"
+            expected: "get"
+        exam_tip: "'kubectl create role' with --verb and --resource is much faster than hand-writing YAML under time pressure."
+
+      - id: cka-01-rbac-t3
+        prompt: |
+          Bind the `pod-reader` Role to the `ci-bot` ServiceAccount using a
+          RoleBinding named `ci-bot-pod-reader`, all in `game-lab`.
+        hints:
+          - "kubectl create rolebinding ci-bot-pod-reader --role=pod-reader --serviceaccount=game-lab:ci-bot -n game-lab"
+        cleanup:
+          - "kubectl delete rolebinding ci-bot-pod-reader -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: rolebinding
+            name: ci-bot-pod-reader
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: rolebinding
+            name: ci-bot-pod-reader
+            namespace: game-lab
+            jsonpath: "{.roleRef.name}"
+            expected: "pod-reader"
+        exam_tip: "Verify RBAC with 'kubectl auth can-i get pods --as=system:serviceaccount:game-lab:ci-bot -n game-lab'."
+
+      - id: cka-01-rbac-t4
+        prompt: |
+          Confirm the binding actually works: run
+          `kubectl auth can-i list pods --as=system:serviceaccount:game-lab:ci-bot -n game-lab`
+          and make sure it says "yes".
+        hints:
+          - "This is exactly the command in the prompt — no changes needed if the previous tasks are correct."
+        checks:
+          - type: command_output_contains
+            command: "kubectl auth can-i list pods --as=system:serviceaccount:game-lab:ci-bot -n game-lab"
+            expected: "yes"
+        exam_tip: "'kubectl auth can-i' is the fastest way to sanity-check RBAC without waiting for a Pod to fail."
+
+  - id: cka-01-node-maintenance
+    title: "Manage a highly-available Kubernetes cluster / node maintenance"
+    tasks:
+      - id: cka-01-node-t1
+        prompt: |
+          List your cluster's nodes and note the name of one worker/control node.
+          Then cordon that node so it is marked unschedulable.
+        hints:
+          - "kubectl get nodes"
+          - "kubectl cordon <node-name>"
+        checks:
+          - type: manual
+            prompt: "Did you run 'kubectl cordon <node>' on a real node in your cluster?"
+        exam_tip: "cordon only stops new Pods scheduling — it does not evict existing ones. drain does both."
+
+      - id: cka-01-node-t2
+        prompt: |
+          Uncordon the node you cordoned in the previous task so it is
+          schedulable again.
+        hints:
+          - "kubectl uncordon <node-name>"
+        checks:
+          - type: manual
+            prompt: "Did you run 'kubectl uncordon <node>' to make it schedulable again?"
+        exam_tip: "Always uncordon after maintenance — a forgotten cordon quietly shrinks your capacity."
+
+      - id: cka-01-node-t3
+        prompt: |
+          Apply a taint to a node: key `dedicated`, value `game`, effect
+          `NoSchedule`.
+        hints:
+          - "kubectl taint nodes <node-name> dedicated=game:NoSchedule"
+        cleanup:
+          - "true  # remove the taint manually with 'kubectl taint nodes <node> dedicated=game:NoSchedule-' when done experimenting"
+        checks:
+          - type: command_output_contains
+            command: "kubectl get nodes -o jsonpath='{range .items[*]}{.spec.taints}{\"\\n\"}{end}'"
+            expected: "dedicated"
+        exam_tip: "Remove a taint by repeating the same taint expression with a trailing '-'."
+
+  - id: cka-01-etcd
+    title: "Perform etcd backup and restore"
+    tasks:
+      - id: cka-01-etcd-t1
+        prompt: |
+          Take an etcd snapshot using `etcdctl snapshot save`, pointing at
+          your cluster's etcd endpoint and certificates (paths vary by
+          install — check /var/lib/k0s/pki/etcd/ on a k0s controller node).
+          Save the snapshot to /tmp/etcd-snapshot.db.
+        hints:
+          - "sudo k0s etcd member-list   # confirms etcd is reachable via the k0s CLI"
+          - "ETCDCTL_API=3 etcdctl snapshot save /tmp/etcd-snapshot.db --endpoints=https://127.0.0.1:2379 --cacert=/var/lib/k0s/pki/etcd/ca.crt --cert=/var/lib/k0s/pki/etcd/server.crt --key=/var/lib/k0s/pki/etcd/server.key"
+        checks:
+          - type: manual
+            prompt: "Did you successfully create an etcd snapshot file?"
+        exam_tip: "On the real exam, etcdctl flags for certs/endpoints are usually pre-exported as env vars — check before typing them manually."
+
+      - id: cka-01-etcd-t2
+        prompt: |
+          Verify the snapshot you took is valid using
+          `etcdctl snapshot status /tmp/etcd-snapshot.db -w table`.
+        hints:
+          - "ETCDCTL_API=3 etcdctl snapshot status /tmp/etcd-snapshot.db -w table"
+        checks:
+          - type: manual
+            prompt: "Did the snapshot status command report a valid snapshot (hash, revision, total keys)?"
+        exam_tip: "Always verify a backup immediately after taking it — a bad snapshot is worse than no backup because it creates false confidence."

@@ -1,0 +1,159 @@
+id: ckad-04-environment-config-security
+title: "Application Environment, Configuration and Security"
+exam: CKAD
+weight: 25
+objectives:
+  - id: ckad-04-configmaps-secrets
+    title: "Use ConfigMaps and Secrets to configure applications"
+    tasks:
+      - id: ckad-04-cm-env-t1
+        prompt: |
+          Create a ConfigMap named `ckad-config` in `game-lab` with keys
+          `GREETING=hello` and `ENV=lab`. Then create a Pod named
+          `env-from-cm` (image `busybox:1.36`, command `sleep 3600`) that
+          loads ALL keys from `ckad-config` as environment variables using
+          `envFrom`.
+        hints:
+          - "kubectl create configmap ckad-config --from-literal=GREETING=hello --from-literal=ENV=lab -n game-lab"
+          - >
+            envFrom:
+              - configMapRef:
+                  name: ckad-config
+        cleanup:
+          - "kubectl delete configmap ckad-config -n game-lab --ignore-not-found"
+          - "kubectl delete pod env-from-cm -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: configmap
+            name: ckad-config
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: pod
+            name: env-from-cm
+            namespace: game-lab
+            jsonpath: "{.spec.containers[0].envFrom[0].configMapRef.name}"
+            expected: "ckad-config"
+        exam_tip: "envFrom bulk-loads every key in a ConfigMap/Secret as an env var — great when you don't want to enumerate each one with env[]."
+
+  - id: ckad-04-security-context
+    title: "Define security contexts (users, capabilities, read-only fs)"
+    tasks:
+      - id: ckad-04-secctx-t1
+        prompt: |
+          Create a Pod named `secure-pod` in `game-lab` (image `busybox:1.36`,
+          command `sleep 3600`) that runs as UID `1000`, non-root, with a
+          read-only root filesystem.
+        hints:
+          - >
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: secure-pod
+              namespace: game-lab
+            spec:
+              securityContext:
+                runAsUser: 1000
+                runAsNonRoot: true
+              containers:
+                - name: busybox
+                  image: busybox:1.36
+                  command: ["sleep", "3600"]
+                  securityContext:
+                    readOnlyRootFilesystem: true
+        cleanup:
+          - "kubectl delete pod secure-pod -n game-lab --ignore-not-found"
+        checks:
+          - type: jsonpath_equals
+            kind: pod
+            name: secure-pod
+            namespace: game-lab
+            jsonpath: "{.spec.securityContext.runAsUser}"
+            expected: 1000
+          - type: jsonpath_equals
+            kind: pod
+            name: secure-pod
+            namespace: game-lab
+            jsonpath: "{.spec.containers[0].securityContext.readOnlyRootFilesystem}"
+            expected: true
+        exam_tip: "Pod-level securityContext sets defaults for all containers; container-level securityContext overrides it per-container."
+
+      - id: ckad-04-caps-t1
+        prompt: |
+          Create a Pod named `cap-drop` in `game-lab` (image `busybox:1.36`,
+          command `sleep 3600`) whose container drops the `ALL` Linux
+          capability set (principle of least privilege).
+        hints:
+          - >
+            securityContext:
+              capabilities:
+                drop: ["ALL"]
+        cleanup:
+          - "kubectl delete pod cap-drop -n game-lab --ignore-not-found"
+        checks:
+          - type: jsonpath_contains
+            kind: pod
+            name: cap-drop
+            namespace: game-lab
+            jsonpath: "{.spec.containers[0].securityContext.capabilities.drop}"
+            expected: "ALL"
+        exam_tip: "Dropping ALL and adding back only the specific capabilities you need is the standard hardening pattern tested on CKAD."
+
+  - id: ckad-04-resource-quota
+    title: "Understand ResourceQuotas and LimitRanges"
+    tasks:
+      - id: ckad-04-quota-t1
+        prompt: |
+          Create a ResourceQuota named `game-quota` in `game-lab` limiting
+          total Pods to `10` and total CPU requests to `2`.
+        hints:
+          - >
+            apiVersion: v1
+            kind: ResourceQuota
+            metadata:
+              name: game-quota
+              namespace: game-lab
+            spec:
+              hard:
+                pods: "10"
+                requests.cpu: "2"
+        cleanup:
+          - "kubectl delete resourcequota game-quota -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: resourcequota
+            name: game-quota
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: resourcequota
+            name: game-quota
+            namespace: game-lab
+            jsonpath: "{.spec.hard.pods}"
+            expected: "10"
+        exam_tip: "Once a ResourceQuota sets requests.cpu/memory, every Pod in that namespace MUST specify requests explicitly or it will be rejected."
+
+  - id: ckad-04-serviceaccounts
+    title: "Use ServiceAccounts for application authentication"
+    tasks:
+      - id: ckad-04-sa-t1
+        prompt: |
+          Create a ServiceAccount named `app-identity` in `game-lab`, then
+          create a Pod named `identified-app` (image `busybox:1.36`,
+          command `sleep 3600`) that runs using that ServiceAccount.
+        hints:
+          - "kubectl create serviceaccount app-identity -n game-lab"
+          - "kubectl run identified-app --image=busybox:1.36 -n game-lab --overrides='{\"spec\":{\"serviceAccountName\":\"app-identity\"}}' --command -- sleep 3600"
+        cleanup:
+          - "kubectl delete pod identified-app -n game-lab --ignore-not-found"
+          - "kubectl delete serviceaccount app-identity -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: serviceaccount
+            name: app-identity
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: pod
+            name: identified-app
+            namespace: game-lab
+            jsonpath: "{.spec.serviceAccountName}"
+            expected: "app-identity"
+        exam_tip: "Every Pod runs as a ServiceAccount whether you set one or not — the unset default is literally named 'default' per namespace."

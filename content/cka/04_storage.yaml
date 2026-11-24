@@ -1,0 +1,201 @@
+id: cka-04-storage
+title: "Storage"
+exam: CKA
+weight: 10
+objectives:
+  - id: cka-04-pv-pvc
+    title: "Understand storage classes, persistent volumes, and persistent volume claims"
+    tasks:
+      - id: cka-04-pv-t1
+        prompt: |
+          Create a PersistentVolume named `game-pv` with capacity `1Gi`,
+          accessMode `ReadWriteOnce`, using hostPath `/tmp/game-pv-data`.
+        hints:
+          - >
+            apiVersion: v1
+            kind: PersistentVolume
+            metadata:
+              name: game-pv
+            spec:
+              capacity:
+                storage: 1Gi
+              accessModes: ["ReadWriteOnce"]
+              hostPath:
+                path: /tmp/game-pv-data
+        cleanup:
+          - "kubectl delete pv game-pv --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: pv
+            name: game-pv
+          - type: jsonpath_equals
+            kind: pv
+            name: game-pv
+            jsonpath: "{.spec.capacity.storage}"
+            expected: "1Gi"
+        exam_tip: "hostPath PVs only make sense on single-node labs like this one — real clusters use networked storage backends."
+
+      - id: cka-04-pv-t2
+        prompt: |
+          Create a PersistentVolumeClaim named `game-pvc` in `game-lab`
+          requesting `500Mi` with accessMode `ReadWriteOnce`, and confirm it
+          binds to `game-pv`.
+        hints:
+          - >
+            apiVersion: v1
+            kind: PersistentVolumeClaim
+            metadata:
+              name: game-pvc
+              namespace: game-lab
+            spec:
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 500Mi
+        cleanup:
+          - "kubectl delete pvc game-pvc -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: pvc
+            name: game-pvc
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: pvc
+            name: game-pvc
+            namespace: game-lab
+            jsonpath: "{.status.phase}"
+            expected: "Bound"
+        exam_tip: "A PVC binds to the smallest PV that satisfies its size and access mode — capacity requested is a minimum, not exact match."
+
+      - id: cka-04-pv-t3
+        prompt: |
+          Create a Pod named `storage-user` in `game-lab` (image
+          `busybox:1.36`, command `sleep 3600`) that mounts `game-pvc` at
+          `/data`.
+        hints:
+          - >
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: storage-user
+              namespace: game-lab
+            spec:
+              containers:
+                - name: busybox
+                  image: busybox:1.36
+                  command: ["sleep", "3600"]
+                  volumeMounts:
+                    - name: data
+                      mountPath: /data
+              volumes:
+                - name: data
+                  persistentVolumeClaim:
+                    claimName: game-pvc
+        cleanup:
+          - "kubectl delete pod storage-user -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: pod
+            name: storage-user
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: pod
+            name: storage-user
+            namespace: game-lab
+            jsonpath: "{.spec.volumes[0].persistentVolumeClaim.claimName}"
+            expected: "game-pvc"
+          - type: pod_running
+            name: storage-user
+            namespace: game-lab
+        exam_tip: "If the Pod stays Pending, 'kubectl describe pod' will usually show a volume-mount or scheduling error directly in Events."
+
+  - id: cka-04-configmaps-secrets
+    title: "Configure applications with ConfigMaps and Secrets as volumes"
+    tasks:
+      - id: cka-04-cm-t1
+        prompt: |
+          Create a ConfigMap named `app-config` in `game-lab` with key
+          `LOG_LEVEL=debug`.
+        hints:
+          - "kubectl create configmap app-config --from-literal=LOG_LEVEL=debug -n game-lab"
+        cleanup:
+          - "kubectl delete configmap app-config -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: configmap
+            name: app-config
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: configmap
+            name: app-config
+            namespace: game-lab
+            jsonpath: "{.data.LOG_LEVEL}"
+            expected: "debug"
+        exam_tip: "--from-literal is fastest for single key/value pairs; use --from-file when you need whole config files inside a ConfigMap."
+
+      - id: cka-04-secret-t1
+        prompt: |
+          Create a Secret named `app-secret` in `game-lab` (generic type)
+          with key `API_KEY=supersecret123`.
+        hints:
+          - "kubectl create secret generic app-secret --from-literal=API_KEY=supersecret123 -n game-lab"
+        cleanup:
+          - "kubectl delete secret app-secret -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: secret
+            name: app-secret
+            namespace: game-lab
+        exam_tip: "Secret values are only base64-encoded, not encrypted at rest by default — enable encryption-at-rest config for real security."
+
+      - id: cka-04-cm-vol-t1
+        prompt: |
+          Create a Pod named `configured-app` in `game-lab` (image
+          `busybox:1.36`, command `sleep 3600`) that mounts `app-config` as
+          a volume at `/etc/config` AND exposes `API_KEY` from `app-secret`
+          as an environment variable.
+        hints:
+          - >
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: configured-app
+              namespace: game-lab
+            spec:
+              containers:
+                - name: app
+                  image: busybox:1.36
+                  command: ["sleep", "3600"]
+                  env:
+                    - name: API_KEY
+                      valueFrom:
+                        secretKeyRef:
+                          name: app-secret
+                          key: API_KEY
+                  volumeMounts:
+                    - name: config
+                      mountPath: /etc/config
+              volumes:
+                - name: config
+                  configMap:
+                    name: app-config
+        cleanup:
+          - "kubectl delete pod configured-app -n game-lab --ignore-not-found"
+        checks:
+          - type: resource_exists
+            kind: pod
+            name: configured-app
+            namespace: game-lab
+          - type: jsonpath_equals
+            kind: pod
+            name: configured-app
+            namespace: game-lab
+            jsonpath: "{.spec.volumes[0].configMap.name}"
+            expected: "app-config"
+          - type: jsonpath_equals
+            kind: pod
+            name: configured-app
+            namespace: game-lab
+            jsonpath: "{.spec.containers[0].env[0].valueFrom.secretKeyRef.name}"
+            expected: "app-secret"
+        exam_tip: "You can mix ConfigMap volumes and Secret env vars freely on the same Pod — pick whichever is more natural per field."
